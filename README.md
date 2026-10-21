@@ -197,3 +197,56 @@ For operators use `z` because `s` belongs to vim-surround.
 
 When there are matches in another group, hints appear around the group.
 ![leap](https://github.com/ok97465/spyder_okvim/raw/main/doc/leap.gif)
+
+## Substitute: `:%s/pattern/replacement/[g]`
+
+- `:%s/...` applies to the whole document. `:s/...` applies to the current line
+  only, as in Vim. These are the only supported ranges.
+- `pattern` is a regular expression (Python `re` syntax).
+- Without `g`, only the first match on each line is replaced. With `g`, every
+  match on each line is replaced.
+- The replacement may use `\1`..`\9` for capture groups, `&` (or `\0`) for the
+  whole match, and `\t` for a tab. `\&`, `\\` and `\/` give a literal `&`, `\`
+  and `/`.
+- The delimiter `/` can be escaped as `\/` in the pattern.
+- The whole substitution is a single undo step.
+- Case sensitivity follows the `ignorecase` and `smartcase` options.
+- After a successful `:s`, the pattern becomes the current search pattern: its
+  matches are highlighted and `n` / `N` jump between them across the whole
+  document (wrapping around). After a `g` substitution usually no matches are
+  left, as in Vim.
+
+### Confirming each match: the `c` flag
+
+Add `c` to the flags (`:%s/a/b/c`, `:%s/a/b/gc` or `:%s/a/b/cg`) to be asked
+about every match. The match is highlighted, the cursor jumps to it and the
+message area shows `replace? (3/12) y/n/a/q/l`. Without `g` only the first match
+per line is offered.
+
+| Key | Action |
+|---|---|
+| `y` | Replace this match and go to the next |
+| `n` | Skip this match |
+| `a` | Replace this and all remaining matches |
+| `l` | Replace this match and quit |
+| `q`, `Esc` | Quit, keeping the replacements accepted so far |
+
+Each `y` is applied immediately and is its own undo step, as in Vim; `a` applies
+all remaining matches as one step. If nothing was accepted the cursor returns to
+where it started; otherwise it moves to the last changed line. The pattern
+becomes the search pattern and the command is remembered for `&` and `g&`, but
+`g&` does not ask for confirmation again (the `c` flag is not stored).
+Unknown keys are ignored. `E486` is reported if the pattern is invalid or has no
+match.
+
+### Repeating a substitution
+
+| Key | Action |
+|---|---|
+| `&` | Repeat the last `:s` on the current line, without flags |
+| `g&` | Repeat the last `:s` on the whole file, with the flags of the original command (`g` is kept) |
+
+Without the `g` flag, `:%s/a/b/` replaces the first match per line. To change
+the next occurrence by hand, use `n` to jump to it, or `&` on the line. `.` does
+not repeat `:s` (as in Vim). `&` and `g&` do not overwrite the stored flags.
+Without a previous `:s` they report `E35: No previous regular expression`.
