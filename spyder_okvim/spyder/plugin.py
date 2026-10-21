@@ -5,13 +5,17 @@
 # Licensed under the terms of the MIT License
 # (see LICENSE.txt for details)
 # -----------------------------------------------------------------------------
-"""OkVim Plugin."""
+"""OkVim Plugin.
+
+Disclaimer: the editor focus filter was added with AI assistance
+(claude-sonnet-5-5).
+"""
 
 # Third Party Libraries
 import qtawesome as qta
 from qtpy.QtCore import Qt, Signal, QCoreApplication
 from qtpy.QtGui import QKeySequence
-from qtpy.QtWidgets import QHBoxLayout, QShortcut
+from qtpy.QtWidgets import QApplication, QHBoxLayout, QShortcut
 from spyder.api.plugin_registration.decorators import on_plugin_available
 from spyder.api.plugins import Plugins, SpyderDockablePlugin
 
@@ -24,6 +28,7 @@ from spyder.utils.icon_manager import MAIN_FG_COLOR
 from spyder_okvim.spyder.api import CustomLayout
 from spyder_okvim.spyder.config import CONF_DEFAULTS, CONF_SECTION, CONF_VERSION
 from spyder_okvim.spyder.confpage import OkvimConfigPage
+from spyder_okvim.spyder.editor_focus import EditorFocusFilter
 from spyder_okvim.spyder.vim_widgets import VimPane
 
 
@@ -31,7 +36,6 @@ class StatusBarVimWidget(StatusBarWidget):
     """Status bar widget for okvim."""
 
     ID = f"{CONF_SECTION}_status_bar"
-    CONF_SECTION = CONF_SECTION  # Ensure Qt mixins see the configuration section
 
     def __init__(self, parent, msg_label, status_label, cmd_line):
         """Initialize status bar widget.
@@ -170,6 +174,10 @@ class OkVim(SpyderDockablePlugin):  # pylint: disable=R0904
         )
         esc_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
 
+        # Start in Normal mode whenever the editor gets focus
+        self._editor_focus_filter = EditorFocusFilter(vim_cmd.vim_status, self)
+        QApplication.instance().installEventFilter(self._editor_focus_filter)
+
     @on_plugin_available(plugin=Plugins.Preferences)
     def on_preferences_available(self) -> None:
         """Connect when preferences available."""
@@ -185,6 +193,9 @@ class OkVim(SpyderDockablePlugin):  # pylint: disable=R0904
 
     def on_close(self, cancellable: bool = True) -> bool:
         """Handle plugin shutdown."""
+        focus_filter = getattr(self, "_editor_focus_filter", None)
+        if focus_filter is not None:
+            QApplication.instance().removeEventFilter(focus_filter)
         widget = self.get_widget()
         if widget is not None:
             try:

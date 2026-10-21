@@ -5,6 +5,9 @@ This module implements :class:`ExecutorNormalCmd`, which interprets keystrokes
 when the editor is in *normal* mode.  Commands are dispatched to helper classes
 for motion and editing actions.  The executor can also switch into various
 submodes such as search or register selection.
+
+Disclaimer: parts of this module (``&``) were generated with AI assistance
+(claude-sonnet-5-5).
 """
 
 # Standard Libraries
@@ -37,7 +40,7 @@ from spyder_okvim.executor.executor_sub import (
     ExecutorSubCmd_register,
     ExecutorSubCmd_z,
     ExecutorSubCmd_Z,
-    ExecutorSubCmdLeap,
+    ExecutorSubCmdSneak,
     ExecutorSubMotion,
     ExecutorSubMotion_c,
     ExecutorSubMotion_d,
@@ -59,7 +62,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         self.move_cursor_no_end = self.vim_status.cursor.set_cursor_pos_without_end
 
         cmds = (
-            "aAiIvVhHjpPyJkKlLMoOruwWbBegGsSxdcDCnN^$~:%fFtT\"`'m;,.zZ/<>{} \b\rq@\[\]*#"
+            "aAiIvVhHjpPyJkKlLMoOruwWbBegGsSxdcDCnN^$~:%fFtT\"`'m;,.zZ/<>{} \b\rq@\[\]*#&"
         )
         cmds = "".join(re.escape(c) for c in cmds)
         self.pattern_cmd = re.compile(r"(\d*)([{}])".format(cmds))
@@ -84,7 +87,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         self.executor_sub_search = ExecutorSearch(vim_status)
         self.executor_sub_alnum = ExecutorSubCmd_alnum(vim_status)
         self.executor_sub_easymotion = ExecutorEasymotion(vim_status)
-        self.executor_sub_leap = ExecutorSubCmdLeap(vim_status)
+        self.executor_sub_sneak = ExecutorSubCmdSneak(vim_status)
         self.executor_sub_opensquarebracekt = ExecutorSubCmd_opensquarebracket(
             vim_status
         )
@@ -102,7 +105,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         if not (cursor.atBlockEnd() and cursor.atBlockStart()):
             cursor.movePosition(QTextCursor.Right)
             self.set_cursor(cursor)
-        self.get_editor().setFocus()
+        self.vim_status.set_focus_to_editor()
 
     def A(self, num=1, num_str=""):
         """Append text at the end of the line."""
@@ -111,12 +114,12 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         cursor = self.get_cursor()
         cursor.movePosition(QTextCursor.EndOfLine)
         self.set_cursor(cursor)
-        self.get_editor().setFocus()
+        self.vim_status.set_focus_to_editor()
 
     def i(self, num=1, num_str=""):
         """Insert text before the cursor."""
         self.vim_status.update_dot_cmd(connect_editor=True)
-        self.get_editor().setFocus()
+        self.vim_status.set_focus_to_editor()
 
     def I(self, num=1, num_str=""):
         """Insert text before the first non-blank in the line."""
@@ -128,7 +131,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         cursor.setPosition(motion_info.cursor_pos)
         self.set_cursor(cursor)
 
-        self.get_editor().setFocus()
+        self.vim_status.set_focus_to_editor()
 
     def v(self, num=1, num_str=""):
         """Start visual mode per character."""
@@ -157,7 +160,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         cursor = editor.textCursor()
         cursor.movePosition(QTextCursor.EndOfLine)
         editor.setTextCursor(cursor)
-        editor.setFocus()
+        self.vim_status.set_focus_to_editor()
 
         # Send the keyevent to editor for using autoindent of editor.
         new_event = QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier)
@@ -173,7 +176,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         cursor.insertText("\n")
         cursor.movePosition(QTextCursor.Up)
         editor.setTextCursor(cursor)
-        editor.setFocus()
+        self.vim_status.set_focus_to_editor()
 
         self.vim_status.update_dot_cmd(connect_editor=True)
 
@@ -382,32 +385,42 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
 
     def s(self, num=1, num_str=""):
         """Delete characters and start insert."""
-        use_leap = CONF.get(CONF_SECTION, "use_leap")
-        if use_leap:
-            executor_sub = self.executor_sub_leap
+        use_sneak = CONF.get(CONF_SECTION, "use_sneak")
+        if use_sneak:
+            executor_sub = self.executor_sub_sneak
 
             self.set_parent_info_to_submode(executor_sub, num, num_str)
 
             executor_sub.set_func_list_deferred(
-                [FUNC_INFO(self.apply_motion_info_in_normal, True)]
+                [
+                    FUNC_INFO(self.apply_motion_info_in_normal, True),
+                    FUNC_INFO(
+                        self.helper_motion.display_another_group_after_sneak, False
+                    ),
+                ]
             )
             return RETURN_EXECUTOR_METHOD_INFO(executor_sub, True)
         else:
             motion_info = self.helper_motion.l(num, num_str)
             self.helper_action.yank(motion_info)
             self.helper_action.delete(motion_info, is_insert=True)
-            self.get_editor().setFocus()
+            self.vim_status.set_focus_to_editor()
 
     def S(self, num=1, num_str=""):
         """Delete characters and start insert."""
-        use_leap = CONF.get(CONF_SECTION, "use_leap")
-        if use_leap:
-            executor_sub = self.executor_sub_leap
+        use_sneak = CONF.get(CONF_SECTION, "use_sneak")
+        if use_sneak:
+            executor_sub = self.executor_sub_sneak
 
             self.set_parent_info_to_submode(executor_sub, num, num_str)
 
             executor_sub.set_func_list_deferred(
-                [FUNC_INFO(self.apply_motion_info_in_normal, True)]
+                [
+                    FUNC_INFO(self.apply_motion_info_in_normal, True),
+                    FUNC_INFO(
+                        self.helper_motion.display_another_group_after_rsneak, False
+                    ),
+                ]
             )
             return RETURN_EXECUTOR_METHOD_INFO(executor_sub, True)
         else:
@@ -421,7 +434,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
             self.helper_action.delete(
                 motion_info, is_insert=True, replace_txt=" " * n_space
             )
-            self.get_editor().setFocus()
+            self.vim_status.set_focus_to_editor()
 
     def x(self, num=1, num_str=""):
         """Delete characters and start insert."""
@@ -468,7 +481,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         self.helper_action.delete(motion_info, is_insert=True)
 
         self.vim_status.cursor.set_cursor_pos(sel_start)
-        self.get_editor().setFocus()
+        self.vim_status.set_focus_to_editor()
 
     def d(self, num=1, num_str=""):
         """Delete text."""
@@ -497,7 +510,7 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
             [
                 FUNC_INFO(self.helper_action.yank, True),
                 FUNC_INFO(lambda x: self.helper_action.delete(x, is_insert=True), True),
-                FUNC_INFO(self.get_editor().setFocus, False),
+                FUNC_INFO(self.vim_status.set_focus_to_editor, False),
             ]
         )
 
@@ -671,5 +684,9 @@ class ExecutorNormalCmd(MovementMixin, ExecutorBase):
         """Search word under cursor backward."""
         motion_info = self.helper_motion.sharp(num)
         self.apply_motion_info_in_normal(motion_info)
+
+    def ampersand(self, num=1, num_str=""):
+        """Repeat the last ``:s`` on the current line without flags."""
+        self.helper_action.repeat_substitute(whole_file=False)
 
 

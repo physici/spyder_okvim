@@ -5,7 +5,11 @@
 # Licensed under the terms of the MIT License
 # (see LICENSE.txt for details)
 # -----------------------------------------------------------------------------
-"""OkVim Widget."""
+"""OkVim Widget.
+
+Disclaimer: the submode ``on_escape`` hooks were added with AI assistance
+(claude-sonnet-5-5).
+"""
 
 # Standard Libraries
 import os.path as osp
@@ -32,7 +36,6 @@ from spyder_okvim.executor import (
 )
 from spyder_okvim.spyder.config import CONF_SECTION, KEYCODE2STR
 from spyder_okvim.utils.file_search import FileSearchDialog
-from spyder_okvim.utils.qtcompat import exec_dialog, text_width
 from spyder_okvim.utils.testing_env import running_in_pytest
 from spyder_okvim.vim import InputCmdInfo, KeyInfo, VimState, VimStatus
 
@@ -283,7 +286,7 @@ class VimShortcut(QObject):
         root_folder = self.main.projects.get_active_project_path()
 
         dlg = FileSearchDialog(root_folder, self.main)
-        exec_dialog(dlg)
+        dlg.exec_()
         path = dlg.get_selected_path()
 
         if osp.isfile(path):
@@ -323,7 +326,7 @@ class VimStateLabel(QLabel):
         self.change_state(VimState.INSERT)
 
         self.setAlignment(Qt.AlignCenter)
-        tw = text_width(self.fontMetrics(), " NORMAL ")
+        tw = self.fontMetrics().width(" NORMAL ")
         fw = self.style().pixelMetric(QStyle.PM_DefaultFrameWidth)
         self.setFixedWidth(tw + (2 * fw) + 4)
 
@@ -361,7 +364,7 @@ class VimLineEdit(QLineEdit):
         self.vim_shortcut = vim_shortcut
 
         # Set size
-        tw = text_width(self.fontMetrics(), " :%s/international/internationl/g ")
+        tw = self.fontMetrics().width(" :%s/international/internationl/g ")
         fw = self.style().pixelMetric(QStyle.PM_DefaultFrameWidth)
         self.setFixedWidth(tw + (2 * fw) + 4)
 
@@ -407,13 +410,13 @@ class VimLineEdit(QLineEdit):
         """Clear state."""
         self.vim_status.input_cmd.clear()
         self.vim_status.remove_marker_of_easymotion()
-        sub_mode = self.vim_status.sub_mode
-        if sub_mode:
-            try:
-                sub_mode.on_escape()
-            finally:
-                self.vim_status.sub_mode = None
-                self.clear()
+        if self.vim_status.sub_mode:
+            # Submodes with state to finalize (e.g. the :s confirm prompt)
+            on_escape = getattr(self.vim_status.sub_mode, "on_escape", None)
+            if on_escape is not None:
+                on_escape()
+            self.vim_status.sub_mode = None
+            self.clear()
         else:
             self.to_normal()
 
@@ -430,6 +433,11 @@ class VimLineEdit(QLineEdit):
         super().focusOutEvent(event)
         self.clear()
         try:
+            # Do not leave a :s confirm session pending while editing elsewhere
+            sub_mode = self.vim_status.sub_mode
+            if getattr(sub_mode, "on_escape", None) is not None:
+                sub_mode.on_escape()
+                self.vim_status.sub_mode = None
             self.vim_widget.vim_status.to_insert()
         except RuntimeError:
             # The status may already be deleted when closing widgets
@@ -442,7 +450,7 @@ class VimMessageLabel(QLabel):
     def __init__(self, txt, parent):
         super().__init__(txt, parent)
         self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        tw = text_width(self.fontMetrics(), " recording @q... 0000 fewers lines ")
+        tw = self.fontMetrics().width(" recording @q... 0000 fewers lines ")
         fw = self.style().pixelMetric(QStyle.PM_DefaultFrameWidth)
         self.setFixedWidth(tw + (2 * fw) + 4)
 
@@ -534,15 +542,7 @@ class VimWidget(QWidget):
     def set_leader_key(self) -> None:
         """Set leader key from CONF."""
         leader_key = CONF.get(CONF_SECTION, "leader_key")
-        key_sequence = QKeySequence.fromString(leader_key)
-        try:
-            key = key_sequence[0]
-        except (IndexError, TypeError):
-            key = None
-        if hasattr(key, "key"):
-            # PySide6 returns QKeyCombination objects; extract the raw key.
-            key = key.key()
-        leader_key2 = KEYCODE2STR.get(key, None)
+        leader_key2 = KEYCODE2STR.get(QKeySequence.fromString(leader_key)[0], None)
         if leader_key2:
             leader_key = leader_key2
         self.leader_key = leader_key
@@ -568,7 +568,17 @@ class VimWidget(QWidget):
                 self.commandline.clear()
                 return
 
-        if executor(txt):
+        # Focus moved by a command (gd, mark jumps, i, ...) is intentional and
+        # must not be bounced back to the command line by the focus filter.
+        status = self.vim_status
+        previous_request = status.editor_focus_requested
+        status.editor_focus_requested = True
+        try:
+            is_done = executor(txt)
+        finally:
+            status.editor_focus_requested = previous_request
+
+        if is_done:
             self.commandline.clear()
 
         if self.vim_status.manager_macro.reg_name_for_execute:

@@ -1,4 +1,9 @@
-"""Main object storing global Vim state."""
+# -*- coding: utf-8 -*-
+"""Main object storing global Vim state.
+
+Disclaimer: parts of this module (``last_substitute``) were generated with AI
+assistance (claude-sonnet-5-5).
+"""
 
 # Standard Libraries
 import os.path as osp
@@ -14,16 +19,23 @@ from spyder.config.manager import CONF
 # Project Libraries
 from spyder_okvim.spyder.config import CONF_SECTION
 from spyder_okvim.utils.bookmark_manager import BookmarkManager
-from spyder_okvim.utils.cell_helpers import CellRegion, get_document_cells
 from spyder_okvim.utils.easymotion import EasyMotionMarkerManager, EasyMotionPainter
 from spyder_okvim.utils.jump_list import JumpList
-from spyder_okvim.utils.qtcompat import text_width
+from spyder_okvim.utils.cell_helpers import CellRegion, get_document_cells
 
 from .cursor import VimCursor
-from .label import ANNOTATION_STYLE, InlineLabel
+from .label import InlineLabel
 from .macro import MacroManager
 from .search import SearchInfo
-from .state import DotCmdInfo, FindInfo, InputCmdInfo, KeyInfo, RegisterInfo, VimState
+from .state import (
+    DotCmdInfo,
+    FindInfo,
+    InputCmdInfo,
+    KeyInfo,
+    RegisterInfo,
+    SubstituteInfo,
+    VimState,
+)
 
 
 class VimStatus(QObject):
@@ -80,6 +92,9 @@ class VimStatus(QObject):
         # search
         self.search = SearchInfo(self.cursor)
 
+        # last :s command, repeated by & and g&
+        self.last_substitute = SubstituteInfo()
+
         # message
         self.msg_label = msg_label
         self.msg_prefix = ""
@@ -107,12 +122,14 @@ class VimStatus(QObject):
         self.jump_list = JumpList()
         self.timer_go_to_definition = None
 
-        # easymotion
+        # True while an executor deliberately moves focus to the editor
+        self.editor_focus_requested = False
+
         self.painter_easymotion = EasyMotionPainter()
         self.manager_marker_easymotion = EasyMotionMarkerManager()
         self.editor_connected_easymotion = None
 
-        # Leap
+        # Sneak
         self.n_annotate_max = 50
         self.labels_for_annotate = [
             InlineLabel(self.main) for _ in range(self.n_annotate_max)
@@ -127,7 +144,6 @@ class VimStatus(QObject):
         if editor:
             editor.clear_extra_selections("vim_selection")
             editor.clear_extra_selections("vim_cursor")
-        self.hide_annotate_on_txt()
 
     def is_normal(self):
         """Check that vim state is normal mode."""
@@ -173,6 +189,9 @@ class VimStatus(QObject):
 
         # search
         self.search = SearchInfo(self.cursor)
+
+        # last :s command, repeated by & and g&
+        self.last_substitute = SubstituteInfo()
 
         # Macro
         self.manager_macro = MacroManager()
@@ -247,6 +266,20 @@ class VimStatus(QObject):
         """Set focus to vim command line."""
         if self.cmd_line:
             self.cmd_line.setFocus()
+
+    def set_focus_to_editor(self) -> None:
+        """
+        Give focus to the editor on purpose, which starts insert mode.
+
+        Plain ``editor.setFocus()`` is treated as an accidental focus change
+        and bounces back to the command line, so commands such as ``i``,
+        ``a`` and ``o`` must use this method instead.
+        """
+        self.editor_focus_requested = True
+        try:
+            self.get_editor().setFocus()
+        finally:
+            self.editor_focus_requested = False
 
     def set_focus_to_vim_after_delay(self, delay=300):
         """Set focus to the Vim command line after ``delay`` milliseconds.
@@ -425,7 +458,7 @@ class VimStatus(QObject):
             current = self.get_current_location()
             if previous is not None and current and current != previous:
                 pos = current[1]
-
+                
                 if pos < 1:
                     # The cursor may be set to 0 before it is created and positioned,
                     # but a definition never starts at cursor position 0.
@@ -538,7 +571,7 @@ class VimStatus(QObject):
         for idx in range(self.n_annotate_max):
             self.labels_for_annotate[idx].hide()
 
-    def annotate_on_txt(self, info: dict[int, str]):
+    def annotate_on_txt(self, info: dict[int, str], timeout: int = -1):
         """Annotate the editor with temporary inline labels.
 
         Args:
@@ -549,26 +582,13 @@ class VimStatus(QObject):
         tc = editor.textCursor()
         font = editor.viewport().font()
         fm = editor.fontMetrics()
-        ch_width = text_width(fm, "H")
+        ch_width = fm.width("H")
         ch_height = fm.height()
 
-        padding_h = (
-            ANNOTATION_STYLE["padding_h"] * 2 + ANNOTATION_STYLE["border_width"] * 2
-        )
-        padding_v = (
-            ANNOTATION_STYLE["padding_v"] * 2 + ANNOTATION_STYLE["border_width"] * 2
-        )
-
         for idx, (pos, data) in enumerate(info.items()):
-            if idx >= self.n_annotate_max:
-                break
-
             label = self.labels_for_annotate[idx]
             label.set_style(font.family(), font.pointSize())
-            text_width_px = max(text_width(fm, data), ch_width)
-            label_width = text_width_px + padding_h
-            label_height = ch_height + padding_v
-            label.setFixedSize(label_width, label_height)
+            label.setFixedSize(ch_width * len(data), ch_height)
             label.setText(data)
 
             tc.setPosition(pos)
@@ -576,6 +596,12 @@ class VimStatus(QObject):
             pos_in_parent = editor.viewport().mapTo(
                 label.parent(), rect_in_local.topLeft()
             )
+            print(pos_in_parent)
             label.move(pos_in_parent)
             label.raise_()
             label.show()
+
+            if idx > self.n_annotate_max - 1:
+                break
+
+        QTimer.singleShot(timeout, self.hide_annotate_on_txt)

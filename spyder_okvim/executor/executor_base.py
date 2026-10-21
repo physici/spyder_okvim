@@ -6,6 +6,9 @@ handle the parsing of command strings and delegation of actions to the
 ``MotionHelper`` and ``ActionHelper`` utilities. Executors interpret user
 keystrokes, update the shared :class:`~spyder_okvim.vim.VimStatus` object and
 decide whether submodes should be entered.
+
+Disclaimer: parts of this module (the ``&`` symbol mapping) were generated with
+AI assistance (claude-sonnet-5-5).
 """
 
 # Standard Libraries
@@ -53,6 +56,7 @@ class ExecutorBase:
         "#": "sharp",
         "{": "openbrace",
         "}": "closebrace",
+        "&": "ampersand",
     }
 
     def __init__(self, vim_status):
@@ -177,10 +181,6 @@ class ExecutorSubBase(ExecutorBase):
     def update_input_cmd_info(self, num_str, cmd, input_txt):
         """Add input cmd to vim_status."""
         self.vim_status.input_cmd.cmd += input_txt
-
-    def on_escape(self) -> None:
-        """Handle ``Esc`` key while in this submode."""
-        return
 
     # ------------------------------------------------------------------
     # Common editor actions

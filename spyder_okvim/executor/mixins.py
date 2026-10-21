@@ -201,16 +201,21 @@ class SelectionMixin:
         self.helper_action.delete(None, is_insert=True)
         self.vim_status.to_normal()
         self.set_cursor_pos(sel_start)
-        self.get_editor().setFocus()
+        self.vim_status.set_focus_to_editor()
 
     def s(self, num: int = 1, num_str: str = ""):
-        """Replace selection using leap if enabled."""
-        use_leap = CONF.get(CONF_SECTION, "use_leap")
-        if use_leap:
-            executor_sub = self.executor_sub_leap
+        """Replace selection using sneak if enabled."""
+        use_sneak = CONF.get(CONF_SECTION, "use_sneak")
+        if use_sneak:
+            executor_sub = self.executor_sub_sneak
             self.set_parent_info_to_submode(executor_sub, num, num_str)
             executor_sub.set_func_list_deferred(
-                [FUNC_INFO(self.apply_motion_info_in_sel, True)]
+                [
+                    FUNC_INFO(self.apply_motion_info_in_sel, True),
+                    FUNC_INFO(
+                        self.helper_motion.display_another_group_after_sneak, False
+                    ),
+                ]
             )
             return RETURN_EXECUTOR_METHOD_INFO(executor_sub, True)
         else:

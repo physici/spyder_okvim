@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Core data structures for Vim status handling."""
+"""Core data structures for Vim status handling.
+
+Disclaimer: parts of this module (``SubstituteInfo``) were generated with AI
+assistance (claude-sonnet-5-5).
+"""
 
 from qtpy.QtCore import QEvent
 from qtpy.QtGui import QKeyEvent
@@ -148,5 +152,36 @@ class RegisterInfo:
         self.name = ""
         self.content = ""
         self.type = VimState.NORMAL
+
+
+class SubstituteInfo:
+    """
+    Arguments of the last ``:s`` command, used by ``&`` and ``g&``.
+
+    Disclaimer: this class was generated with AI assistance (claude-sonnet-5-5).
+    """
+
+    def __init__(self) -> None:
+        """Initialize with no previous substitute."""
+        self.pattern: str = ""
+        self.replacement: str = ""
+        self.replace_all: bool = False
+
+    def set(self, pattern: str, replacement: str, replace_all: bool) -> None:
+        """
+        Remember the arguments of a substitute command.
+
+        Parameters
+        ----------
+        pattern : str
+            Regular expression that was searched for.
+        replacement : str
+            Replacement text.
+        replace_all : bool
+            Whether the ``g`` flag was given.
+        """
+        self.pattern = pattern
+        self.replacement = replacement
+        self.replace_all = replace_all
 
 

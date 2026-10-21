@@ -1,16 +1,91 @@
 # -*- coding: utf-8 -*-
-"""Utility functions that implement Vim-style editing actions."""
+"""Utility functions that implement Vim-style editing actions.
+
+Disclaimer: parts of this module (the ``:s`` substitute support) were generated
+with AI assistance (claude-sonnet-5-5).
+"""
+
+from __future__ import annotations
 
 # Standard Libraries
 import re
+from dataclasses import dataclass
 
 # Third Party Libraries
 from qtpy.QtGui import QTextCursor
+from spyder.config.manager import CONF
 
 # Project Libraries
+from spyder_okvim.spyder.config import CONF_SECTION
 from spyder_okvim.utils.motion import MotionInfo, MotionType
 from spyder_okvim.utils.motion_helpers import MotionHelper
 from spyder_okvim.vim import VimState
+
+
+@dataclass
+class SubstituteMatch:
+    """
+    One match of a substitute command.
+
+    Attributes
+    ----------
+    start : int
+        Document position where the match starts.
+    end : int
+        Document position where the match ends.
+    text : str
+        Expanded replacement text.
+    block_no : int
+        Number of the line that contains the match.
+    """
+
+    start: int
+    end: int
+    text: str
+    block_no: int
+
+
+def _expand_replacement(match: re.Match[str], replacement: str) -> str:
+    """
+    Expand a Vim-style replacement string for one regex match.
+
+    Parameters
+    ----------
+    match : re.Match[str]
+        The match being replaced.
+    replacement : str
+        Replacement text. ``&`` and ``\\0`` insert the whole match, ``\\1`` to
+        ``\\9`` insert capture groups, ``\\t`` is a tab, and any other
+        backslash sequence (for example ``\\&`` or ``\\\\``) inserts the escaped
+        character literally.
+
+    Returns
+    -------
+    str
+        The expanded replacement text.
+    """
+    result: list[str] = []
+    idx = 0
+    while idx < len(replacement):
+        char = replacement[idx]
+        if char == "&":
+            result.append(match.group(0))
+        elif char == "\\" and idx + 1 < len(replacement):
+            idx += 1
+            escaped = replacement[idx]
+            if escaped in "0123456789":
+                group_no = int(escaped)
+                # Groups that do not exist in the pattern expand to nothing
+                if group_no <= match.re.groups:
+                    result.append(match.group(group_no) or "")
+            elif escaped == "t":
+                result.append("\t")
+            else:
+                result.append(escaped)
+        else:
+            result.append(char)
+        idx += 1
+    return "".join(result)
 
 
 def _get_block_texts(editor, start_block: int, end_block: int) -> list[str]:
@@ -144,6 +219,292 @@ class ActionHelper:
         self.set_cursor_pos(pos)
 
         editor.document_did_change()
+
+    @staticmethod
+    def _compile_substitute_pattern(pattern: str) -> re.Pattern[str]:
+        """
+        Compile a substitute pattern honoring ``ignorecase`` and ``smartcase``.
+
+        Parameters
+        ----------
+        pattern : str
+            Regular expression (Python ``re`` syntax).
+
+        Returns
+        -------
+        re.Pattern[str]
+            The compiled pattern.
+
+        Raises
+        ------
+        re.error
+            If ``pattern`` is not a valid regular expression.
+        """
+        flags = 0
+        if CONF.get(CONF_SECTION, "ignorecase"):
+            is_smartcase = CONF.get(CONF_SECTION, "smartcase")
+            if not (is_smartcase and pattern.lower() != pattern):
+                flags = re.IGNORECASE
+        return re.compile(pattern, flags)
+
+    def collect_substitutions(
+        self,
+        pattern: str,
+        replacement: str,
+        replace_all: bool,
+        block_range: tuple[int, int] | None = None,
+    ) -> list[SubstituteMatch]:
+        """
+        Find the matches a substitute command would replace, without editing.
+
+        Parameters
+        ----------
+        pattern : str
+            Regular expression (Python ``re`` syntax).
+        replacement : str
+            Replacement text, see :func:`_expand_replacement`.
+        replace_all : bool
+            Collect every match in a line if True, otherwise only the first.
+        block_range : tuple[int, int] | None
+            First and last block number (inclusive) to process. The whole
+            document is processed if None.
+
+        Returns
+        -------
+        list[SubstituteMatch]
+            The matches in document order.
+
+        Raises
+        ------
+        re.error
+            If ``pattern`` is not a valid regular expression.
+        """
+        regex = self._compile_substitute_pattern(pattern)
+        document = self.get_editor().document()
+
+        if block_range is None:
+            first_block_no, last_block_no = 0, document.blockCount() - 1
+        else:
+            first_block_no, last_block_no = block_range
+
+        found: list[SubstituteMatch] = []
+        for block_no in range(first_block_no, last_block_no + 1):
+            block = document.findBlockByNumber(block_no)
+            for match in regex.finditer(block.text()):
+                found.append(
+                    SubstituteMatch(
+                        start=block.position() + match.start(),
+                        end=block.position() + match.end(),
+                        text=_expand_replacement(match, replacement),
+                        block_no=block_no,
+                    )
+                )
+                if not replace_all:
+                    break
+        return found
+
+    def apply_substitutions(self, matches: list[SubstituteMatch]) -> None:
+        """
+        Replace the given matches as one undo step.
+
+        Parameters
+        ----------
+        matches : list[SubstituteMatch]
+            Non-overlapping matches in document order, as returned by
+            :meth:`collect_substitutions`. The document must not have changed
+            since they were collected.
+        """
+        if not matches:
+            return
+
+        editor = self.get_editor()
+        edit_cursor = QTextCursor(editor.document())
+        edit_cursor.beginEditBlock()
+        try:
+            # Work backwards so earlier positions stay valid
+            for item in reversed(matches):
+                edit_cursor.setPosition(item.start)
+                edit_cursor.setPosition(item.end, QTextCursor.KeepAnchor)
+                edit_cursor.insertText(item.text)
+        finally:
+            edit_cursor.endEditBlock()
+
+        # Vim leaves the cursor on the last substituted line
+        last_block = editor.document().findBlockByNumber(matches[-1].block_no)
+        self.vim_status.cursor.set_cursor_pos(last_block.position())
+        editor.document_did_change()
+
+    def substitute(
+        self,
+        pattern: str,
+        replacement: str,
+        replace_all: bool,
+        block_range: tuple[int, int] | None = None,
+    ) -> tuple[int, int]:
+        """
+        Replace regex matches in the lines of the document.
+
+        The whole operation is one undo step. Case sensitivity follows the
+        ``ignorecase`` and ``smartcase`` options.
+
+        Parameters
+        ----------
+        pattern : str
+            Regular expression (Python ``re`` syntax).
+        replacement : str
+            Replacement text, see :func:`_expand_replacement`.
+        replace_all : bool
+            Replace every match in a line if True, otherwise only the first.
+        block_range : tuple[int, int] | None
+            First and last block number (inclusive) to process. The whole
+            document is processed if None.
+
+        Returns
+        -------
+        tuple[int, int]
+            Number of substitutions and number of lines that matched.
+
+        Raises
+        ------
+        re.error
+            If ``pattern`` is not a valid regular expression.
+        """
+        regex = self._compile_substitute_pattern(pattern)
+
+        editor = self.get_editor()
+        document = editor.document()
+        edit_cursor = QTextCursor(document)
+
+        n_substitution = 0
+        n_line = 0
+        pos_last_line = None
+        count = 0 if replace_all else 1
+
+        if block_range is None:
+            first_block_no, last_block_no = 0, document.blockCount() - 1
+        else:
+            first_block_no, last_block_no = block_range
+
+        edit_cursor.beginEditBlock()
+        try:
+            for block_no in range(first_block_no, last_block_no + 1):
+                block = document.findBlockByNumber(block_no)
+                old_text = block.text()
+                new_text, n_sub = regex.subn(
+                    lambda match: _expand_replacement(match, replacement),
+                    old_text,
+                    count=count,
+                )
+                if n_sub == 0:
+                    continue
+
+                n_substitution += n_sub
+                n_line += 1
+                pos_last_line = block.position()
+                if new_text != old_text:
+                    edit_cursor.setPosition(block.position())
+                    edit_cursor.setPosition(
+                        block.position() + len(old_text), QTextCursor.KeepAnchor
+                    )
+                    edit_cursor.insertText(new_text)
+        finally:
+            edit_cursor.endEditBlock()
+
+        if pos_last_line is not None:
+            # Vim leaves the cursor on the last substituted line
+            self.vim_status.cursor.set_cursor_pos(pos_last_line)
+            editor.document_did_change()
+
+        return n_substitution, n_line
+
+    def run_substitute(
+        self,
+        pattern: str,
+        replacement: str,
+        replace_all: bool,
+        whole_file: bool = True,
+        remember: bool = True,
+    ) -> bool:
+        """
+        Run a substitute command, remember it and report the result.
+
+        On success the pattern also becomes the last search pattern, so that
+        ``n`` and ``N`` jump between its matches, and the arguments are stored
+        for ``&`` and ``g&``. Errors are reported in the status bar.
+
+        Parameters
+        ----------
+        pattern : str
+            Regular expression (Python ``re`` syntax).
+        replacement : str
+            Replacement text, see :func:`_expand_replacement`.
+        replace_all : bool
+            Replace every match in a line if True, otherwise only the first.
+        whole_file : bool
+            Process every line if True, otherwise only the current line.
+        remember : bool
+            Store the arguments for ``&`` and ``g&`` if True. A repeat keeps
+            the arguments of the original command instead.
+
+        Returns
+        -------
+        bool
+            True if at least one substitution was made.
+        """
+        vs = self.vim_status
+
+        block_range = None
+        if not whole_file:
+            block_no = self.get_editor().textCursor().blockNumber()
+            block_range = (block_no, block_no)
+
+        try:
+            n_substitution, n_line = self.substitute(
+                pattern, replacement, replace_all, block_range
+            )
+        except re.error as err:
+            vs.set_message(f"E486: Invalid pattern: {err}")
+            return False
+
+        if n_substitution == 0:
+            vs.set_message(f"E486: Pattern not found: {pattern}")
+            return False
+
+        if remember:
+            vs.last_substitute.set(pattern, replacement, replace_all)
+        self.helper_motion.search(pattern)
+
+        if not vs.is_normal():
+            vs.to_normal()
+        vs.set_message(f"{n_substitution} substitutions on {n_line} lines")
+        return True
+
+    def repeat_substitute(self, whole_file: bool = False) -> bool:
+        """
+        Repeat the last substitute command without its flags.
+
+        ``&`` repeats on the current line without the ``g`` flag. ``g&``
+        repeats on every line with the flags of the original command.
+
+        Parameters
+        ----------
+        whole_file : bool
+            Process every line and keep the original ``g`` flag if True.
+
+        Returns
+        -------
+        bool
+            True if at least one substitution was made.
+        """
+        last = self.vim_status.last_substitute
+        if not last.pattern:
+            self.vim_status.set_message("E35: No previous regular expression")
+            return False
+
+        replace_all = last.replace_all if whole_file else False
+        return self.run_substitute(
+            last.pattern, last.replacement, replace_all, whole_file, remember=False
+        )
 
     def replace_txt_with_ch(self, pos_start: int, pos_end: int, ch: str) -> None:
         """Replace selected text with a given character.
